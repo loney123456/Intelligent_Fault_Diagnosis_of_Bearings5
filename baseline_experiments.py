@@ -5453,6 +5453,22 @@ def train_one_dann_run_ultimate(X_train, y_train, X_val, y_val, target_x, random
                                 target_names=['Normal', 'IR', 'OR', 'Ball'],
                                 digits=4, zero_division=0))
 
+    if random_state == 0:
+        save_path = "dann_model_best.pth"
+        torch.save(best_state, save_path)
+        print(f"\n  ✅ 最佳模型已保存到: {save_path}")
+
+        # 同时保存模型结构信息，方便后续加载
+        model_info = {
+            'state_dict': best_state,
+            'best_f1': best_f1,
+            'best_acc': best_acc,
+            'num_classes': NUM_CLASSES,
+            'model_type': 'DANN_Model_Ultimate'
+        }
+        torch.save(model_info, "dann_model_best_full.pth")
+        print(f"  ✅ 完整模型信息已保存到: dann_model_best_full.pth")
+
     return best_acc, best_f1
 
 
