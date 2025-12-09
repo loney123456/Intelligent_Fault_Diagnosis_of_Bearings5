@@ -1931,6 +1931,476 @@
 #     main()
 
 
+# import os
+#
+# os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+#
+# import numpy as np
+# import torch
+# import torch.nn as nn
+# import torch.optim as optim
+# from torch.utils.data import TensorDataset, DataLoader
+#
+# from sklearn.svm import SVC
+# from sklearn.preprocessing import StandardScaler
+# from sklearn.pipeline import Pipeline
+# from sklearn.metrics import accuracy_score, f1_score, classification_report
+# from sklearn.model_selection import train_test_split
+#
+# # =========================================
+# # 通用配置
+# # =========================================
+# DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# NUM_CLASSES = 4
+# CNN_EPOCHS = 60
+# DANN_EPOCHS = 100
+# BATCH_SIZE = 128
+# LR_CNN = 1e-3
+# LR_DANN = 3e-4
+#
+#
+# # =========================================
+# # 统计特征提取
+# # =========================================
+# def extract_stat_features(X: np.ndarray) -> np.ndarray:
+#     N = X.shape[0]
+#     feats = np.zeros((N, 5), dtype=np.float32)
+#     for i in range(N):
+#         x = X[i]
+#         mean = np.mean(x)
+#         std = np.std(x)
+#         rms = np.sqrt(np.mean(x ** 2))
+#         var = np.var(x) + 1e-12
+#         kurtosis = np.mean((x - mean) ** 4) / (var ** 2)
+#         peak_factor = np.max(np.abs(x)) / (rms + 1e-12)
+#         feats[i] = [mean, std, rms, kurtosis, peak_factor]
+#     return feats
+#
+#
+# # =========================================
+# # 简单 1D-CNN
+# # =========================================
+# class SimpleCNN(nn.Module):
+#     def __init__(self, input_length=512, num_classes=4):
+#         super(SimpleCNN, self).__init__()
+#         self.feature = nn.Sequential(
+#             nn.Conv1d(1, 16, kernel_size=7, stride=1, padding=3),
+#             nn.BatchNorm1d(16),
+#             nn.ReLU(),
+#             nn.MaxPool1d(2),
+#             nn.Conv1d(16, 32, kernel_size=5, stride=1, padding=2),
+#             nn.BatchNorm1d(32),
+#             nn.ReLU(),
+#             nn.MaxPool1d(2),
+#             nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1),
+#             nn.BatchNorm1d(64),
+#             nn.ReLU(),
+#             nn.AdaptiveAvgPool1d(1)
+#         )
+#         self.classifier = nn.Sequential(
+#             nn.Flatten(),
+#             nn.Linear(64, 64),
+#             nn.ReLU(),
+#             nn.Dropout(0.5),
+#             nn.Linear(64, num_classes)
+#         )
+#
+#     def forward(self, x):
+#         x = x.unsqueeze(1)
+#         x = self.feature(x)
+#         x = self.classifier(x)
+#         return x
+#
+#
+# # =========================================
+# # 梯度反转层
+# # =========================================
+# class GradientReverseLayer(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, x, alpha):
+#         ctx.alpha = alpha
+#         return x.view_as(x)
+#
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         return grad_output.neg() * ctx.alpha, None
+#
+#
+# # =========================================
+# # 改进版 DANN 模型
+# # =========================================
+# class DANN_Model_Improved(nn.Module):
+#     def __init__(self, num_classes=4):
+#         super(DANN_Model_Improved, self).__init__()
+#         self.feature = nn.Sequential(
+#             nn.Conv1d(1, 16, kernel_size=7, stride=2, padding=3),
+#             nn.InstanceNorm1d(16, affine=True),
+#             nn.ReLU(),
+#             nn.MaxPool1d(2),
+#             nn.Conv1d(16, 32, kernel_size=5, stride=2, padding=2),
+#             nn.InstanceNorm1d(32, affine=True),
+#             nn.ReLU(),
+#             nn.MaxPool1d(2),
+#             nn.Conv1d(32, 64, kernel_size=3, stride=1, padding=1),
+#             nn.InstanceNorm1d(64, affine=True),
+#             nn.ReLU(),
+#             nn.AdaptiveAvgPool1d(1)
+#         )
+#         self.class_classifier = nn.Sequential(
+#             nn.Linear(64, 64),
+#             nn.ReLU(),
+#             nn.Dropout(0.3),
+#             nn.Linear(64, num_classes)
+#         )
+#         self.domain_classifier = nn.Sequential(
+#             nn.Linear(64, 32),
+#             nn.ReLU(),
+#             nn.Linear(32, 2)
+#         )
+#
+#     def forward(self, x, alpha=1.0):
+#         x = x.unsqueeze(1)
+#         features = self.feature(x)
+#         features = features.view(features.size(0), -1)
+#         class_output = self.class_classifier(features)
+#         reverse_features = GradientReverseLayer.apply(features, alpha)
+#         domain_output = self.domain_classifier(reverse_features)
+#         return class_output, domain_output, features
+#
+#
+# # =========================================
+# # CNN 训练函数（带类别平衡）
+# # =========================================
+# def train_one_cnn_run(X_train, y_train, X_val, y_val, random_state):
+#     torch.manual_seed(random_state)
+#     if torch.cuda.is_available():
+#         torch.cuda.manual_seed_all(random_state)
+#
+#     # 计算类别权重
+#     class_counts = np.bincount(y_train)
+#     class_weights = len(y_train) / (len(class_counts) * class_counts)
+#     class_weights = torch.FloatTensor(class_weights).to(DEVICE)
+#
+#     train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
+#     val_ds = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
+#     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+#     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+#
+#     model = SimpleCNN(input_length=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+#     criterion = nn.CrossEntropyLoss(weight=class_weights)
+#     optimizer = optim.Adam(model.parameters(), lr=LR_CNN)
+#
+#     best_f1 = 0.0
+#     best_acc = 0.0
+#     best_state = None
+#
+#     print(f"\n[Run seed={random_state}] 训练 CNN 基线模型 ...")
+#     for epoch in range(1, CNN_EPOCHS + 1):
+#         model.train()
+#         total_loss = 0.0
+#         for xb, yb in train_loader:
+#             xb = xb.to(DEVICE)
+#             yb = yb.to(DEVICE)
+#             optimizer.zero_grad()
+#             logits = model(xb)
+#             loss = criterion(logits, yb)
+#             loss.backward()
+#             optimizer.step()
+#             total_loss += loss.item()
+#
+#         model.eval()
+#         y_true, y_pred = [], []
+#         with torch.no_grad():
+#             for xb, yb in val_loader:
+#                 xb = xb.to(DEVICE)
+#                 logits = model(xb)
+#                 preds = logits.argmax(dim=1).cpu().numpy()
+#                 y_pred.extend(preds)
+#                 y_true.extend(yb.numpy())
+#
+#         acc = accuracy_score(y_true, y_pred)
+#         f1 = f1_score(y_true, y_pred, average='macro')
+#
+#         if epoch % 10 == 0 or epoch == 1:
+#             avg_loss = total_loss / len(train_loader)
+#             print(f"  Epoch [{epoch:03d}/{CNN_EPOCHS}] Loss={avg_loss:.4f}  ValAcc={acc:.4f}  ValF1={f1:.4f}")
+#
+#         if f1 > best_f1:
+#             best_f1 = f1
+#             best_acc = acc
+#             best_state = model.state_dict()
+#
+#     if best_state is not None:
+#         model.load_state_dict(best_state)
+#
+#     return best_acc, best_f1
+#
+#
+# # =========================================
+# # SVM 训练函数（带类别平衡）
+# # =========================================
+# def train_one_svm_run(feats_train, y_train, feats_val, y_val, random_state):
+#     print(f"[Run seed={random_state}] 训练 SVM 基线模型 ...")
+#     clf = Pipeline([
+#         ("scaler", StandardScaler()),
+#         ("svc", SVC(kernel='rbf', C=10.0, gamma='scale', class_weight='balanced'))
+#     ])
+#     clf.fit(feats_train, y_train)
+#     y_pred = clf.predict(feats_val)
+#     acc = accuracy_score(y_val, y_pred)
+#     f1 = f1_score(y_val, y_pred, average='macro')
+#     print(f"  SVM ValAcc={acc:.4f}  ValF1={f1:.4f}")
+#     return acc, f1
+#
+#
+# # =========================================
+# # DANN 训练函数（带类别平衡）
+# # =========================================
+# def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random_state):
+#     torch.manual_seed(random_state)
+#     if torch.cuda.is_available():
+#         torch.cuda.manual_seed_all(random_state)
+#
+#     # 计算类别权重
+#     class_counts = np.bincount(y_train)
+#     class_weights = len(y_train) / (len(class_counts) * class_counts)
+#     class_weights = torch.FloatTensor(class_weights).to(DEVICE)
+#     print(f"  类别权重: {class_weights.cpu().numpy().round(2)}")
+#
+#     src_train_ds = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
+#     src_val_ds = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
+#     src_train_loader = DataLoader(src_train_ds, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+#     src_val_loader = DataLoader(src_val_ds, batch_size=BATCH_SIZE, shuffle=False)
+#
+#     tgt_ds = TensorDataset(torch.from_numpy(target_x), torch.zeros(len(target_x)).long())
+#     tgt_loader = DataLoader(tgt_ds, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+#
+#     model = DANN_Model_Improved(num_classes=NUM_CLASSES).to(DEVICE)
+#     optimizer = optim.Adam(model.parameters(), lr=LR_DANN, weight_decay=1e-4)
+#     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=DANN_EPOCHS)
+#
+#     # 使用加权交叉熵
+#     criterion_class = nn.CrossEntropyLoss(weight=class_weights)
+#     criterion_domain = nn.CrossEntropyLoss()
+#
+#     best_f1 = 0.0
+#     best_acc = 0.0
+#     best_state = None
+#
+#     WARMUP_EPOCHS = 40
+#     DOMAIN_WEIGHT = 0.02
+#     PATIENCE = 20
+#     no_improve_count = 0
+#
+#     print(f"\n[Run seed={random_state}] 训练类别平衡版 DANN 模型 ...")
+#
+#     for epoch in range(1, DANN_EPOCHS + 1):
+#         model.train()
+#         total_cls_loss = 0.0
+#         total_dom_loss = 0.0
+#         total_correct = 0
+#         total_samples = 0
+#
+#         len_dataloader = min(len(src_train_loader), len(tgt_loader))
+#         src_iter = iter(src_train_loader)
+#         tgt_iter = iter(tgt_loader)
+#
+#         for i in range(len_dataloader):
+#             try:
+#                 s_data, s_label = next(src_iter)
+#                 t_data, _ = next(tgt_iter)
+#             except StopIteration:
+#                 break
+#
+#             s_data, s_label = s_data.to(DEVICE), s_label.to(DEVICE)
+#             t_data = t_data.to(DEVICE)
+#
+#             bs_src = s_data.size(0)
+#             bs_tgt = t_data.size(0)
+#
+#             domain_label_s = torch.zeros(bs_src, dtype=torch.long, device=DEVICE)
+#             domain_label_t = torch.ones(bs_tgt, dtype=torch.long, device=DEVICE)
+#
+#             p = float(i + (epoch - 1) * len_dataloader) / (DANN_EPOCHS * len_dataloader)
+#             alpha = 2.0 / (1.0 + np.exp(-10 * p)) - 1.0
+#
+#             if epoch <= WARMUP_EPOCHS:
+#                 alpha = 0.0
+#                 domain_weight = 0.0
+#             else:
+#                 progress = (epoch - WARMUP_EPOCHS) / (DANN_EPOCHS - WARMUP_EPOCHS)
+#                 domain_weight = DOMAIN_WEIGHT * min(progress * 2, 1.0)
+#
+#             class_out_s, domain_out_s, _ = model(s_data, alpha)
+#             _, domain_out_t, _ = model(t_data, alpha)
+#
+#             err_s_label = criterion_class(class_out_s, s_label)
+#
+#             if epoch <= WARMUP_EPOCHS:
+#                 loss = err_s_label
+#                 domain_loss_val = 0.0
+#             else:
+#                 err_s_domain = criterion_domain(domain_out_s, domain_label_s)
+#                 err_t_domain = criterion_domain(domain_out_t, domain_label_t)
+#                 domain_loss_val = (err_s_domain + err_t_domain).item()
+#                 loss = err_s_label + (err_s_domain + err_t_domain) * domain_weight
+#
+#             optimizer.zero_grad()
+#             loss.backward()
+#             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+#             optimizer.step()
+#
+#             total_cls_loss += err_s_label.item()
+#             total_dom_loss += domain_loss_val
+#
+#             preds = class_out_s.argmax(dim=1)
+#             total_correct += (preds == s_label).sum().item()
+#             total_samples += bs_src
+#
+#         scheduler.step()
+#
+#         avg_cls_loss = total_cls_loss / max(len_dataloader, 1)
+#         avg_dom_loss = total_dom_loss / max(len_dataloader, 1)
+#         train_acc = total_correct / max(total_samples, 1)
+#
+#         model.eval()
+#         y_true, y_pred = [], []
+#         with torch.no_grad():
+#             for xb, yb in src_val_loader:
+#                 xb = xb.to(DEVICE)
+#                 class_out, _, _ = model(xb, alpha=0.0)
+#                 preds = class_out.argmax(dim=1).cpu().numpy()
+#                 y_pred.extend(preds)
+#                 y_true.extend(yb.numpy())
+#
+#         acc = accuracy_score(y_true, y_pred)
+#         f1 = f1_score(y_true, y_pred, average='macro')
+#
+#         if epoch % 10 == 0 or epoch == 1:
+#             pred_dist = np.bincount(y_pred, minlength=NUM_CLASSES)
+#             print(f"  [DANN] Epoch [{epoch:03d}/{DANN_EPOCHS}]")
+#             print(f"    ClsLoss={avg_cls_loss:.4f} DomLoss={avg_dom_loss:.4f}")
+#             print(f"    TrainAcc={train_acc:.4f} ValAcc={acc:.4f} ValF1={f1:.4f}")
+#             print(f"    预测分布: {pred_dist}")
+#
+#         if f1 > best_f1:
+#             best_f1 = f1
+#             best_acc = acc
+#             best_state = model.state_dict()
+#             no_improve_count = 0
+#         else:
+#             no_improve_count += 1
+#
+#         if no_improve_count >= PATIENCE and epoch > WARMUP_EPOCHS + 10:
+#             print(f"  [早停] 连续 {PATIENCE} 轮无改善")
+#             break
+#
+#     if best_state is not None:
+#         model.load_state_dict(best_state)
+#
+#     # 打印最终分类报告
+#     model.eval()
+#     y_true_final, y_pred_final = [], []
+#     with torch.no_grad():
+#         for xb, yb in src_val_loader:
+#             xb = xb.to(DEVICE)
+#             class_out, _, _ = model(xb, alpha=0.0)
+#             preds = class_out.argmax(dim=1).cpu().numpy()
+#             y_pred_final.extend(preds)
+#             y_true_final.extend(yb.numpy())
+#
+#     print("\n  [最终分类报告]")
+#     print(classification_report(y_true_final, y_pred_final,
+#                                 target_names=['Normal', 'IR', 'OR', 'Ball'], digits=4))
+#
+#     return best_acc, best_f1
+#
+#
+# # =========================================
+# # 结果汇总
+# # =========================================
+# def summarize_results(name, results):
+#     accs = np.array([r[0] for r in results])
+#     f1s = np.array([r[1] for r in results])
+#     print("\n" + "#" * 60)
+#     print(f"{name} 在 5 次随机划分上的结果：")
+#     for i, (acc, f1) in enumerate(results, 1):
+#         print(f"  Run{i}: Acc={acc:.4f}, F1={f1:.4f}")
+#     print("-" * 60)
+#     print(f"  Accuracy: mean={accs.mean():.4f}, std={accs.std(ddof=0):.4f}")
+#     print(f"  Macro F1: mean={f1s.mean():.4f}, std={f1s.std(ddof=0):.4f}")
+#     print("#" * 60)
+#
+#
+# # =========================================
+# # 主函数
+# # =========================================
+# def main():
+#     print("正在加载源域数据 source_x.npy / source_y.npy ...")
+#     X = np.load("source_x.npy").astype(np.float32)
+#     y = np.load("source_y.npy").astype(np.int64)
+#     print(f"数据形状：X = {X.shape}, y = {y.shape}")
+#
+#     unique, counts = np.unique(y, return_counts=True)
+#     print("类别分布:", dict(zip(unique, counts)))
+#     print("类别比例:", {k: f"{v / len(y) * 100:.1f}%" for k, v in zip(unique, counts)})
+#
+#     mean = X.mean()
+#     std = X.std()
+#     X = (X - mean) / (std + 1e-5)
+#
+#     all_feats = extract_stat_features(X)
+#
+#     print("正在加载目标域数据 target_data.npy ...")
+#     target_dict = np.load("target_data.npy", allow_pickle=True).item()
+#     tgt_list = []
+#     for k, data in target_dict.items():
+#         data = data.astype(np.float32)
+#         data = (data - mean) / (std + 1e-5)
+#         tgt_list.append(data)
+#     target_x = np.concatenate(tgt_list, axis=0)
+#     print(f"目标域数据合并后形状：{target_x.shape}")
+#
+#     seeds = [0, 1, 2, 3, 4]
+#     cnn_results = []
+#     svm_results = []
+#     dann_results = []
+#
+#     indices = np.arange(len(y))
+#
+#     for i, seed in enumerate(seeds, 1):
+#         print("\n" + "=" * 60)
+#         print(f"  第 {i} 次随机划分 (random_state={seed})")
+#         print("=" * 60)
+#
+#         train_idx, val_idx = train_test_split(
+#             indices, test_size=0.2, random_state=seed, stratify=y
+#         )
+#
+#         X_train, X_val = X[train_idx], X[val_idx]
+#         y_train, y_val = y[train_idx], y[val_idx]
+#         feats_train, feats_val = all_feats[train_idx], all_feats[val_idx]
+#
+#         print(f"划分完成：训练集 {len(train_idx)}，验证集 {len(val_idx)}")
+#
+#         acc_cnn, f1_cnn = train_one_cnn_run(X_train, y_train, X_val, y_val, seed)
+#         cnn_results.append((acc_cnn, f1_cnn))
+#
+#         acc_svm, f1_svm = train_one_svm_run(feats_train, y_train, feats_val, y_val, seed)
+#         svm_results.append((acc_svm, f1_svm))
+#
+#         acc_dann, f1_dann = train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, seed)
+#         dann_results.append((acc_dann, f1_dann))
+#
+#     summarize_results("CNN 基线模型", cnn_results)
+#     summarize_results("统计特征 + SVM 基线模型", svm_results)
+#     summarize_results("DANN 域自适应模型（类别平衡版）", dann_results)
+#
+#
+# if __name__ == "__main__":
+#     main()
+
+
 import os
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -1938,6 +2408,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader
 
@@ -2069,14 +2540,13 @@ class DANN_Model_Improved(nn.Module):
 
 
 # =========================================
-# CNN 训练函数（带类别平衡）
+# CNN 训练函数
 # =========================================
 def train_one_cnn_run(X_train, y_train, X_val, y_val, random_state):
     torch.manual_seed(random_state)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_state)
 
-    # 计算类别权重
     class_counts = np.bincount(y_train)
     class_weights = len(y_train) / (len(class_counts) * class_counts)
     class_weights = torch.FloatTensor(class_weights).to(DEVICE)
@@ -2137,7 +2607,7 @@ def train_one_cnn_run(X_train, y_train, X_val, y_val, random_state):
 
 
 # =========================================
-# SVM 训练函数（带类别平衡）
+# SVM 训练函数
 # =========================================
 def train_one_svm_run(feats_train, y_train, feats_val, y_val, random_state):
     print(f"[Run seed={random_state}] 训练 SVM 基线模型 ...")
@@ -2154,9 +2624,64 @@ def train_one_svm_run(feats_train, y_train, feats_val, y_val, random_state):
 
 
 # =========================================
-# DANN 训练函数（带类别平衡）
+# 【核心改进】生成伪标签的函数
 # =========================================
-def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random_state):
+def generate_pseudo_labels(model, target_x, confidence_threshold=0.85):
+    """
+    对目标域数据生成伪标签
+
+    参数:
+        model: 训练好的模型
+        target_x: 目标域数据 (numpy array)
+        confidence_threshold: 置信度阈值，只有预测置信度高于此值的样本才会被使用
+
+    返回:
+        pseudo_data: 高置信度样本的数据
+        pseudo_labels: 对应的伪标签
+        num_per_class: 每个类别的伪标签数量
+    """
+    model.eval()
+
+    # 将目标域数据转换为 tensor
+    target_tensor = torch.from_numpy(target_x).to(DEVICE)
+
+    # 分批处理，避免显存溢出
+    batch_size = 256
+    all_probs = []
+
+    with torch.no_grad():
+        for i in range(0, len(target_tensor), batch_size):
+            batch = target_tensor[i:i + batch_size]
+            logits, _, _ = model(batch, alpha=0)
+            probs = F.softmax(logits, dim=1)
+            all_probs.append(probs.cpu())
+
+    all_probs = torch.cat(all_probs, dim=0)
+
+    # 获取每个样本的最大置信度和对应的预测类别
+    confidence, pseudo_labels = all_probs.max(dim=1)
+
+    # 筛选高置信度样本
+    high_conf_mask = confidence > confidence_threshold
+
+    # 获取高置信度样本的数据和标签
+    pseudo_data = target_x[high_conf_mask.numpy()]
+    pseudo_labels = pseudo_labels[high_conf_mask].numpy()
+
+    # 统计每个类别的伪标签数量
+    if len(pseudo_labels) > 0:
+        num_per_class = np.bincount(pseudo_labels, minlength=NUM_CLASSES)
+    else:
+        num_per_class = np.zeros(NUM_CLASSES, dtype=int)
+
+    return pseudo_data, pseudo_labels, num_per_class
+
+
+# =========================================
+# 【核心改进】带伪标签的 DANN 训练函数
+# =========================================
+def train_one_dann_run_with_pseudo(X_train, y_train, X_val, y_val, target_x, random_state):
+    """带伪标签策略的 DANN 训练"""
     torch.manual_seed(random_state)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(random_state)
@@ -2179,9 +2704,10 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
     optimizer = optim.Adam(model.parameters(), lr=LR_DANN, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=DANN_EPOCHS)
 
-    # 使用加权交叉熵
     criterion_class = nn.CrossEntropyLoss(weight=class_weights)
     criterion_domain = nn.CrossEntropyLoss()
+    # 伪标签损失不使用类别权重，因为伪标签本身可能有偏差
+    criterion_pseudo = nn.CrossEntropyLoss()
 
     best_f1 = 0.0
     best_acc = 0.0
@@ -2192,14 +2718,42 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
     PATIENCE = 20
     no_improve_count = 0
 
-    print(f"\n[Run seed={random_state}] 训练类别平衡版 DANN 模型 ...")
+    # 【伪标签配置】
+    PSEUDO_START_EPOCH = 60  # 从第60轮开始使用伪标签
+    PSEUDO_THRESHOLD = 0.85  # 置信度阈值
+    PSEUDO_WEIGHT = 0.1  # 伪标签损失权重（较小，避免错误标签影响太大）
+    PSEUDO_UPDATE_FREQ = 10  # 每10轮更新一次伪标签
+
+    # 存储当前的伪标签数据
+    current_pseudo_data = None
+    current_pseudo_labels = None
+
+    print(f"\n[Run seed={random_state}] 训练 DANN 模型（带伪标签） ...")
 
     for epoch in range(1, DANN_EPOCHS + 1):
         model.train()
         total_cls_loss = 0.0
         total_dom_loss = 0.0
+        total_pseudo_loss = 0.0
         total_correct = 0
         total_samples = 0
+
+        # 【伪标签更新】在指定轮次更新伪标签
+        if epoch >= PSEUDO_START_EPOCH and (epoch - PSEUDO_START_EPOCH) % PSEUDO_UPDATE_FREQ == 0:
+            pseudo_data, pseudo_labels, num_per_class = generate_pseudo_labels(
+                model, target_x, confidence_threshold=PSEUDO_THRESHOLD
+            )
+
+            if len(pseudo_labels) > 0:
+                current_pseudo_data = pseudo_data.astype(np.float32)
+                current_pseudo_labels = pseudo_labels.astype(np.int64)
+                print(f"  [伪标签更新] Epoch {epoch}: 生成 {len(pseudo_labels)} 个伪标签")
+                print(f"    各类别数量: Normal={num_per_class[0]}, IR={num_per_class[1]}, "
+                      f"OR={num_per_class[2]}, Ball={num_per_class[3]}")
+            else:
+                current_pseudo_data = None
+                current_pseudo_labels = None
+                print(f"  [伪标签更新] Epoch {epoch}: 无高置信度样本")
 
         len_dataloader = min(len(src_train_loader), len(tgt_loader))
         src_iter = iter(src_train_loader)
@@ -2234,8 +2788,10 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
             class_out_s, domain_out_s, _ = model(s_data, alpha)
             _, domain_out_t, _ = model(t_data, alpha)
 
+            # 源域分类损失
             err_s_label = criterion_class(class_out_s, s_label)
 
+            # 域对抗损失
             if epoch <= WARMUP_EPOCHS:
                 loss = err_s_label
                 domain_loss_val = 0.0
@@ -2245,6 +2801,27 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
                 domain_loss_val = (err_s_domain + err_t_domain).item()
                 loss = err_s_label + (err_s_domain + err_t_domain) * domain_weight
 
+            # 【伪标签损失】
+            pseudo_loss_val = 0.0
+            if epoch >= PSEUDO_START_EPOCH and current_pseudo_data is not None and len(current_pseudo_data) > 0:
+                # 随机采样一个 batch 的伪标签样本
+                pseudo_batch_size = min(BATCH_SIZE // 2, len(current_pseudo_data))
+                pseudo_indices = np.random.choice(len(current_pseudo_data), pseudo_batch_size, replace=False)
+
+                pseudo_batch_x = torch.from_numpy(current_pseudo_data[pseudo_indices]).to(DEVICE)
+                pseudo_batch_y = torch.from_numpy(current_pseudo_labels[pseudo_indices]).to(DEVICE)
+
+                # 计算伪标签损失
+                pseudo_out, _, _ = model(pseudo_batch_x, alpha=0)
+                pseudo_loss = criterion_pseudo(pseudo_out, pseudo_batch_y)
+
+                # 动态调整伪标签权重：随着训练进行逐渐增加
+                pseudo_progress = (epoch - PSEUDO_START_EPOCH) / (DANN_EPOCHS - PSEUDO_START_EPOCH)
+                current_pseudo_weight = PSEUDO_WEIGHT * min(pseudo_progress * 2, 1.0)
+
+                loss = loss + pseudo_loss * current_pseudo_weight
+                pseudo_loss_val = pseudo_loss.item()
+
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -2252,6 +2829,7 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
 
             total_cls_loss += err_s_label.item()
             total_dom_loss += domain_loss_val
+            total_pseudo_loss += pseudo_loss_val
 
             preds = class_out_s.argmax(dim=1)
             total_correct += (preds == s_label).sum().item()
@@ -2261,6 +2839,7 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
 
         avg_cls_loss = total_cls_loss / max(len_dataloader, 1)
         avg_dom_loss = total_dom_loss / max(len_dataloader, 1)
+        avg_pseudo_loss = total_pseudo_loss / max(len_dataloader, 1)
         train_acc = total_correct / max(total_samples, 1)
 
         model.eval()
@@ -2279,7 +2858,7 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
         if epoch % 10 == 0 or epoch == 1:
             pred_dist = np.bincount(y_pred, minlength=NUM_CLASSES)
             print(f"  [DANN] Epoch [{epoch:03d}/{DANN_EPOCHS}]")
-            print(f"    ClsLoss={avg_cls_loss:.4f} DomLoss={avg_dom_loss:.4f}")
+            print(f"    ClsLoss={avg_cls_loss:.4f} DomLoss={avg_dom_loss:.4f} PseudoLoss={avg_pseudo_loss:.4f}")
             print(f"    TrainAcc={train_acc:.4f} ValAcc={acc:.4f} ValF1={f1:.4f}")
             print(f"    预测分布: {pred_dist}")
 
@@ -2311,7 +2890,8 @@ def train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, random
 
     print("\n  [最终分类报告]")
     print(classification_report(y_true_final, y_pred_final,
-                                target_names=['Normal', 'IR', 'OR', 'Ball'], digits=4))
+                                target_names=['Normal', 'IR', 'OR', 'Ball'],
+                                digits=4, zero_division=0))
 
     return best_acc, best_f1
 
@@ -2389,12 +2969,13 @@ def main():
         acc_svm, f1_svm = train_one_svm_run(feats_train, y_train, feats_val, y_val, seed)
         svm_results.append((acc_svm, f1_svm))
 
-        acc_dann, f1_dann = train_one_dann_run_balanced(X_train, y_train, X_val, y_val, target_x, seed)
+        # 使用带伪标签的 DANN
+        acc_dann, f1_dann = train_one_dann_run_with_pseudo(X_train, y_train, X_val, y_val, target_x, seed)
         dann_results.append((acc_dann, f1_dann))
 
     summarize_results("CNN 基线模型", cnn_results)
     summarize_results("统计特征 + SVM 基线模型", svm_results)
-    summarize_results("DANN 域自适应模型（类别平衡版）", dann_results)
+    summarize_results("DANN 域自适应模型（带伪标签）", dann_results)
 
 
 if __name__ == "__main__":
