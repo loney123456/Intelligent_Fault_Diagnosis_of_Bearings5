@@ -274,222 +274,344 @@
 #     print("\n所有数据已保存为 .npy 文件!")
 
 
+# import os
+# import scipy.io
+# import numpy as np
+#
+# ROOT_DIR = r"datasets"
+# SAMPLE_LEN = 512  # 每个样本的时间序列长度
+# STRIDE = 256  # 滑动步长
+#
+# LABEL_MAP = {
+#     'Normal': 0,
+#     'IR': 1,
+#     'OR': 2,
+#     'B': 3
+# }
+#
+# # 采样率配置
+# SOURCE_FS_12K = 12000
+# SOURCE_FS_48K = 48000
+# TARGET_FS = 32000
+#
+# # 统一的目标采样率（重采样到这个频率）
+# UNIFIED_FS = 12000
+#
+#
+# def resample_signal(signal, orig_fs, target_fs):
+#     """简单的重采样（通过插值或抽取）"""
+#     if orig_fs == target_fs:
+#         return signal
+#
+#     ratio = target_fs / orig_fs
+#     new_len = int(len(signal) * ratio)
+#
+#     # 使用线性插值重采样
+#     old_indices = np.arange(len(signal))
+#     new_indices = np.linspace(0, len(signal) - 1, new_len)
+#     resampled = np.interp(new_indices, old_indices, signal)
+#
+#     return resampled
+#
+#
+# def load_mat_data(filepath, key_filter='DE_time'):
+#     """读取mat文件"""
+#     try:
+#         mat = scipy.io.loadmat(filepath)
+#         for key in mat.keys():
+#             if key.startswith('__'):
+#                 continue
+#             if key_filter in key:
+#                 return mat[key].flatten()
+#
+#         # 如果没找到指定key，取最长的数组
+#         sorted_keys = sorted(mat.keys(),
+#                              key=lambda k: len(mat[k]) if hasattr(mat[k], '__len__') else 0,
+#                              reverse=True)
+#         for key in sorted_keys:
+#             if not key.startswith('__'):
+#                 data = mat[key]
+#                 if hasattr(data, 'flatten'):
+#                     return data.flatten()
+#         return None
+#     except Exception as e:
+#         print(f"Error loading {filepath}: {e}")
+#         return None
+#
+#
+# def slice_signal(signal, sample_len=SAMPLE_LEN, stride=STRIDE):
+#     """
+#     将长信号切成多个固定长度的样本
+#     返回: shape = (num_samples, sample_len)
+#     """
+#     samples = []
+#     n_samples = (len(signal) - sample_len) // stride + 1
+#
+#     for i in range(n_samples):
+#         start = i * stride
+#         segment = signal[start: start + sample_len]
+#         samples.append(segment)
+#
+#     return samples
+#
+#
+# def process_source_domain(root_path):
+#     """处理源域数据，返回原始时间序列"""
+#     all_data = []
+#     all_labels = []
+#
+#     # ========== 12kHz DE数据 ==========
+#     de_path = os.path.join(root_path, 'source_domain_datasets', '12kHz_DE_data')
+#     print(f"正在扫描: {de_path} ...")
+#
+#     if os.path.exists(de_path):
+#         for fault_type in os.listdir(de_path):
+#             type_path = os.path.join(de_path, fault_type)
+#             if not os.path.isdir(type_path):
+#                 continue
+#
+#             current_label = LABEL_MAP.get(fault_type, -1)
+#             if current_label == -1:
+#                 print(f"  跳过未知类型: {fault_type}")
+#                 continue
+#
+#             print(f"  处理故障类型: {fault_type} (label={current_label})")
+#
+#             if fault_type == 'OR':
+#                 # OR有子目录（不同位置）
+#                 for position in os.listdir(type_path):
+#                     pos_path = os.path.join(type_path, position)
+#                     if not os.path.isdir(pos_path):
+#                         continue
+#                     for diameter in os.listdir(pos_path):
+#                         dia_path = os.path.join(pos_path, diameter)
+#                         if not os.path.isdir(dia_path):
+#                             continue
+#                         for file in os.listdir(dia_path):
+#                             if file.endswith('.mat'):
+#                                 sig = load_mat_data(os.path.join(dia_path, file))
+#                                 if sig is not None:
+#                                     # 12kHz 数据，不需要重采样
+#                                     samples = slice_signal(sig)
+#                                     all_data.extend(samples)
+#                                     all_labels.extend([current_label] * len(samples))
+#             else:
+#                 # IR, B, Normal 的目录结构
+#                 for diameter in os.listdir(type_path):
+#                     dia_path = os.path.join(type_path, diameter)
+#                     if not os.path.isdir(dia_path):
+#                         # 可能直接是文件
+#                         if diameter.endswith('.mat'):
+#                             sig = load_mat_data(os.path.join(type_path, diameter))
+#                             if sig is not None:
+#                                 samples = slice_signal(sig)
+#                                 all_data.extend(samples)
+#                                 all_labels.extend([current_label] * len(samples))
+#                         continue
+#                     for file in os.listdir(dia_path):
+#                         if file.endswith('.mat'):
+#                             sig = load_mat_data(os.path.join(dia_path, file))
+#                             if sig is not None:
+#                                 samples = slice_signal(sig)
+#                                 all_data.extend(samples)
+#                                 all_labels.extend([current_label] * len(samples))
+#
+#     # ========== 48kHz Normal 数据 ==========
+#     normal_path = os.path.join(root_path, 'source_domain_datasets', '48kHz_Normal_data')
+#     print(f"正在扫描: {normal_path} ...")
+#
+#     if os.path.exists(normal_path):
+#         for file in os.listdir(normal_path):
+#             if file.endswith('.mat'):
+#                 sig = load_mat_data(os.path.join(normal_path, file))
+#                 if sig is not None:
+#                     # 48kHz -> 12kHz，降采样（取1/4）
+#                     sig_resampled = resample_signal(sig, SOURCE_FS_48K, UNIFIED_FS)
+#                     samples = slice_signal(sig_resampled)
+#                     all_data.extend(samples)
+#                     all_labels.extend([LABEL_MAP['Normal']] * len(samples))
+#                     print(f"    {file}: 48kHz降采样后切出 {len(samples)} 个样本")
+#
+#     return np.array(all_data, dtype=np.float32), np.array(all_labels, dtype=np.int64)
+#
+#
+# def process_target_domain(root_path):
+#     """处理目标域数据，返回原始时间序列（无标签）"""
+#     target_dict = {}
+#     target_path = os.path.join(root_path, 'target_domain_datasets')
+#
+#     print(f"正在扫描目标域: {target_path} ...")
+#
+#     if os.path.exists(target_path):
+#         for file in sorted(os.listdir(target_path)):
+#             if file.endswith('.mat'):
+#                 file_id = os.path.splitext(file)[0]
+#                 sig = load_mat_data(os.path.join(target_path, file), key_filter='time')
+#
+#                 if sig is not None:
+#                     # 目标域是32kHz，重采样到12kHz
+#                     sig_resampled = resample_signal(sig, TARGET_FS, UNIFIED_FS)
+#                     samples = slice_signal(sig_resampled)
+#                     target_dict[file_id] = np.array(samples, dtype=np.float32)
+#                     print(f"  {file_id}: 切出 {len(samples)} 个样本")
+#
+#     return target_dict
+#
+#
+# if __name__ == '__main__':
+#     print("=" * 60)
+#     print("开始处理源域数据...")
+#     print("=" * 60)
+#     source_x, source_y = process_source_domain(ROOT_DIR)
+#     print(f"\n源域处理完成:")
+#     print(f"  X shape: {source_x.shape}")
+#     print(f"  Y shape: {source_y.shape}")
+#
+#     # 打印各类别样本数
+#     unique, counts = np.unique(source_y, return_counts=True)
+#     print("  各类别样本数:")
+#     for u, c in zip(unique, counts):
+#         label_name = [k for k, v in LABEL_MAP.items() if v == u][0]
+#         print(f"    {label_name} (label={u}): {c}")
+#
+#     print("\n" + "=" * 60)
+#     print("开始处理目标域数据...")
+#     print("=" * 60)
+#     target_data = process_target_domain(ROOT_DIR)
+#     print(f"\n目标域处理完成: 共 {len(target_data)} 个文件")
+#     total_target_samples = sum(len(v) for v in target_data.values())
+#     print(f"  目标域总样本数: {total_target_samples}")
+#
+#     # 保存
+#     np.save('source_x.npy', source_x)
+#     np.save('source_y.npy', source_y)
+#     np.save('target_data.npy', target_data)
+#
+#     print("\n" + "=" * 60)
+#     print("所有数据已保存:")
+#     print("  source_x.npy")
+#     print("  source_y.npy")
+#     print("  target_data.npy")
+#     print("=" * 60)
+
+
 import os
 import scipy.io
 import numpy as np
 
+# ==========================================
+# 【关键修改】增加样本长度以覆盖低转速下的完整周期
+# 600 RPM = 10转/秒。12kHz采样率下，一圈 = 1200点。
+# 2048点 能覆盖约 1.7 圈，足够诊断故障。
+# ==========================================
+SAMPLE_LEN = 2048
+STRIDE = 1024  # 50% 重叠
+UNIFIED_FS = 12000  # 统一采样率
+
 ROOT_DIR = r"datasets"
-SAMPLE_LEN = 512  # 每个样本的时间序列长度
-STRIDE = 256  # 滑动步长
-
-LABEL_MAP = {
-    'Normal': 0,
-    'IR': 1,
-    'OR': 2,
-    'B': 3
-}
-
-# 采样率配置
-SOURCE_FS_12K = 12000
+LABEL_MAP = {'Normal': 0, 'IR': 1, 'OR': 2, 'B': 3}
 SOURCE_FS_48K = 48000
 TARGET_FS = 32000
 
-# 统一的目标采样率（重采样到这个频率）
-UNIFIED_FS = 12000
-
 
 def resample_signal(signal, orig_fs, target_fs):
-    """简单的重采样（通过插值或抽取）"""
+    """简单的线性插值重采样"""
     if orig_fs == target_fs:
         return signal
-
     ratio = target_fs / orig_fs
     new_len = int(len(signal) * ratio)
-
-    # 使用线性插值重采样
     old_indices = np.arange(len(signal))
     new_indices = np.linspace(0, len(signal) - 1, new_len)
-    resampled = np.interp(new_indices, old_indices, signal)
-
-    return resampled
+    return np.interp(new_indices, old_indices, signal)
 
 
 def load_mat_data(filepath, key_filter='DE_time'):
-    """读取mat文件"""
     try:
         mat = scipy.io.loadmat(filepath)
         for key in mat.keys():
-            if key.startswith('__'):
-                continue
-            if key_filter in key:
-                return mat[key].flatten()
-
-        # 如果没找到指定key，取最长的数组
-        sorted_keys = sorted(mat.keys(),
-                             key=lambda k: len(mat[k]) if hasattr(mat[k], '__len__') else 0,
-                             reverse=True)
-        for key in sorted_keys:
-            if not key.startswith('__'):
-                data = mat[key]
-                if hasattr(data, 'flatten'):
-                    return data.flatten()
+            if key.startswith('__'): continue
+            if key_filter in key: return mat[key].flatten()
+        # Fallback
+        for key in sorted(mat.keys(), key=lambda k: len(mat[k]) if hasattr(mat[k], '__len__') else 0, reverse=True):
+            if not key.startswith('__'): return mat[key].flatten()
         return None
     except Exception as e:
-        print(f"Error loading {filepath}: {e}")
+        print(f"Error: {e}")
         return None
 
 
 def slice_signal(signal, sample_len=SAMPLE_LEN, stride=STRIDE):
-    """
-    将长信号切成多个固定长度的样本
-    返回: shape = (num_samples, sample_len)
-    """
-    samples = []
     n_samples = (len(signal) - sample_len) // stride + 1
-
-    for i in range(n_samples):
-        start = i * stride
-        segment = signal[start: start + sample_len]
-        samples.append(segment)
-
-    return samples
+    if n_samples <= 0: return []
+    # 使用这种方式比循环更快
+    indexer = np.arange(sample_len)[None, :] + np.arange(n_samples)[:, None] * stride
+    return signal[indexer]
 
 
 def process_source_domain(root_path):
-    """处理源域数据，返回原始时间序列"""
-    all_data = []
-    all_labels = []
-
-    # ========== 12kHz DE数据 ==========
+    all_data, all_labels = [], []
     de_path = os.path.join(root_path, 'source_domain_datasets', '12kHz_DE_data')
-    print(f"正在扫描: {de_path} ...")
 
+    # 遍历 DE 数据
     if os.path.exists(de_path):
         for fault_type in os.listdir(de_path):
-            type_path = os.path.join(de_path, fault_type)
-            if not os.path.isdir(type_path):
-                continue
-
             current_label = LABEL_MAP.get(fault_type, -1)
-            if current_label == -1:
-                print(f"  跳过未知类型: {fault_type}")
-                continue
+            if current_label == -1: continue
 
-            print(f"  处理故障类型: {fault_type} (label={current_label})")
-
-            if fault_type == 'OR':
-                # OR有子目录（不同位置）
-                for position in os.listdir(type_path):
-                    pos_path = os.path.join(type_path, position)
-                    if not os.path.isdir(pos_path):
-                        continue
-                    for diameter in os.listdir(pos_path):
-                        dia_path = os.path.join(pos_path, diameter)
-                        if not os.path.isdir(dia_path):
-                            continue
-                        for file in os.listdir(dia_path):
-                            if file.endswith('.mat'):
-                                sig = load_mat_data(os.path.join(dia_path, file))
-                                if sig is not None:
-                                    # 12kHz 数据，不需要重采样
-                                    samples = slice_signal(sig)
-                                    all_data.extend(samples)
-                                    all_labels.extend([current_label] * len(samples))
-            else:
-                # IR, B, Normal 的目录结构
-                for diameter in os.listdir(type_path):
-                    dia_path = os.path.join(type_path, diameter)
-                    if not os.path.isdir(dia_path):
-                        # 可能直接是文件
-                        if diameter.endswith('.mat'):
-                            sig = load_mat_data(os.path.join(type_path, diameter))
-                            if sig is not None:
-                                samples = slice_signal(sig)
-                                all_data.extend(samples)
-                                all_labels.extend([current_label] * len(samples))
-                        continue
-                    for file in os.listdir(dia_path):
-                        if file.endswith('.mat'):
-                            sig = load_mat_data(os.path.join(dia_path, file))
-                            if sig is not None:
-                                samples = slice_signal(sig)
-                                all_data.extend(samples)
+            type_path = os.path.join(de_path, fault_type)
+            # 递归查找所有 .mat 文件
+            for root, _, files in os.walk(type_path):
+                for file in files:
+                    if file.endswith('.mat'):
+                        sig = load_mat_data(os.path.join(root, file))
+                        if sig is not None:
+                            samples = slice_signal(sig)
+                            if len(samples) > 0:
+                                all_data.append(samples)
                                 all_labels.extend([current_label] * len(samples))
 
-    # ========== 48kHz Normal 数据 ==========
+    # 遍历 Normal 数据 (48k -> 12k)
     normal_path = os.path.join(root_path, 'source_domain_datasets', '48kHz_Normal_data')
-    print(f"正在扫描: {normal_path} ...")
-
     if os.path.exists(normal_path):
         for file in os.listdir(normal_path):
             if file.endswith('.mat'):
                 sig = load_mat_data(os.path.join(normal_path, file))
                 if sig is not None:
-                    # 48kHz -> 12kHz，降采样（取1/4）
-                    sig_resampled = resample_signal(sig, SOURCE_FS_48K, UNIFIED_FS)
-                    samples = slice_signal(sig_resampled)
-                    all_data.extend(samples)
-                    all_labels.extend([LABEL_MAP['Normal']] * len(samples))
-                    print(f"    {file}: 48kHz降采样后切出 {len(samples)} 个样本")
+                    sig = resample_signal(sig, SOURCE_FS_48K, UNIFIED_FS)
+                    samples = slice_signal(sig)
+                    if len(samples) > 0:
+                        all_data.append(samples)
+                        all_labels.extend([LABEL_MAP['Normal']] * len(samples))
 
-    return np.array(all_data, dtype=np.float32), np.array(all_labels, dtype=np.int64)
+    return np.concatenate(all_data), np.array(all_labels)
 
 
 def process_target_domain(root_path):
-    """处理目标域数据，返回原始时间序列（无标签）"""
     target_dict = {}
     target_path = os.path.join(root_path, 'target_domain_datasets')
-
-    print(f"正在扫描目标域: {target_path} ...")
-
     if os.path.exists(target_path):
         for file in sorted(os.listdir(target_path)):
             if file.endswith('.mat'):
                 file_id = os.path.splitext(file)[0]
                 sig = load_mat_data(os.path.join(target_path, file), key_filter='time')
-
                 if sig is not None:
-                    # 目标域是32kHz，重采样到12kHz
-                    sig_resampled = resample_signal(sig, TARGET_FS, UNIFIED_FS)
-                    samples = slice_signal(sig_resampled)
-                    target_dict[file_id] = np.array(samples, dtype=np.float32)
-                    print(f"  {file_id}: 切出 {len(samples)} 个样本")
-
+                    # Target 32k -> 12k
+                    sig = resample_signal(sig, TARGET_FS, UNIFIED_FS)
+                    samples = slice_signal(sig)
+                    if len(samples) > 0:
+                        target_dict[file_id] = samples
     return target_dict
 
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("开始处理源域数据...")
-    print("=" * 60)
-    source_x, source_y = process_source_domain(ROOT_DIR)
-    print(f"\n源域处理完成:")
-    print(f"  X shape: {source_x.shape}")
-    print(f"  Y shape: {source_y.shape}")
+    print("Processing Source...")
+    sx, sy = process_source_domain(ROOT_DIR)
+    print(f"Source Shape: {sx.shape}")
 
-    # 打印各类别样本数
-    unique, counts = np.unique(source_y, return_counts=True)
-    print("  各类别样本数:")
-    for u, c in zip(unique, counts):
-        label_name = [k for k, v in LABEL_MAP.items() if v == u][0]
-        print(f"    {label_name} (label={u}): {c}")
+    print("Processing Target...")
+    td = process_target_domain(ROOT_DIR)
 
-    print("\n" + "=" * 60)
-    print("开始处理目标域数据...")
-    print("=" * 60)
-    target_data = process_target_domain(ROOT_DIR)
-    print(f"\n目标域处理完成: 共 {len(target_data)} 个文件")
-    total_target_samples = sum(len(v) for v in target_data.values())
-    print(f"  目标域总样本数: {total_target_samples}")
-
-    # 保存
-    np.save('source_x.npy', source_x)
-    np.save('source_y.npy', source_y)
-    np.save('target_data.npy', target_data)
-
-    print("\n" + "=" * 60)
-    print("所有数据已保存:")
-    print("  source_x.npy")
-    print("  source_y.npy")
-    print("  target_data.npy")
-    print("=" * 60)
+    np.save('source_x.npy', sx.astype(np.float32))
+    np.save('source_y.npy', sy.astype(np.int64))
+    np.save('target_data.npy', td)
+    print("Done.")
